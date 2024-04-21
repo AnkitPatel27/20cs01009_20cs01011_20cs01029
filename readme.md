@@ -1,4 +1,8 @@
+## Members
 
+    1. Ritik Gupta (20CS01029)
+    2. Ankit Patel (20cs01009)
+    3. Chinmay Negi (20CS01011)
 # Lamport Logical Clock
 As per the instruction given we created two threads one is ServerThread and another is a ClientThread 
 
