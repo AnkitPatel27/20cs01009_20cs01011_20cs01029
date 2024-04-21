@@ -21,10 +21,10 @@ using namespace std;
 #define PORT3 8083
 #define callLimit 1
 int PID = 2;
-sem_t mutex;
+sem_t lockClock,mutex;
 int LamportClock = 0;
 vector <int> allSockID;
-priority_queue <pair<int,int>> requestQueue;
+priority_queue <pair<int,int>,vector <pair<int,int>>,greater<pair<int,int>>> requestQueue; //timestamp, PID
 // make a binary semaphore  
 
 
@@ -47,11 +47,19 @@ void signal_handler(int signal) {
 }
 
 void incrementLogicalClock(){
+    sem_wait(&lockClock);
     LamportClock++;
+    sem_post(&lockClock);
 }
 
-void pushIntoQueue(int PID,int timestamp){
+void pushIntoQueue(int PID,int timestamp,bool fromClient){
     sem_wait(&mutex);
+    if(fromClient){
+        cout<<"from client pushed "<<PID<<" "<<timestamp<<endl;
+    }
+    else{
+        cout<<"from server pushed "<<PID<<" "<<timestamp<<endl;
+    }
     requestQueue.push({timestamp,PID});
     sem_post(&mutex);
 }
@@ -67,7 +75,7 @@ void popFromQueue(){
 
 bool checkTurn(){
     sem_wait(&mutex);
-    bool ans = requestQueue.top().second==PID;
+    bool ans = (requestQueue.top().second==PID);
     sem_post(&mutex);
     return ans;
 }
@@ -102,21 +110,15 @@ void parsePacket(const char* input, int* timestamp, int* pid, char* data) {
     }
 }
 
-int sendEvent(int clientSocket,bool replyMsg){
+int sendEvent(int clientSocket,string sendMsg){
     incrementLogicalClock();
-    string msg;
-    if(replyMsg){
-        msg = to_string(LamportClock) + " " + to_string(PID) + " reply_ok";
-    }
-    else{
-        msg = to_string(LamportClock) + " " + to_string(PID) + " request_Resource";
-    }
+    string msg = to_string(LamportClock) + " " + to_string(PID)+" "+ sendMsg;
     const char* message = msg.c_str();
     int a = send(clientSocket, message, strlen(message), 0); 
     return a;
 }
 
-pair<string,int> recvEvent(int clientSocket){
+pair<string,pair<int,int>> recvEvent(int clientSocket){
     char buffer[1024] = { 0 };
     recv(clientSocket, buffer, sizeof(buffer), 0);
     cout<<buffer<<endl;
@@ -124,9 +126,26 @@ pair<string,int> recvEvent(int clientSocket){
     int rpid;
     char data[1024];
     parsePacket(buffer, &timestamp, &rpid, data);
+    
+    sem_wait(&lockClock);
     LamportClock = max(LamportClock,timestamp)+1;
+    sem_post(&lockClock);
+
     string str(data, strlen(data));
-    return {str ,rpid}; 
+    return {str ,{rpid,timestamp}}; 
+}
+
+void printQueue(){
+    sem_wait(&mutex);
+    cout<<"Queue\n";
+    priority_queue <pair<int,int>,vector <pair<int,int>>,greater<pair<int,int>>>  temp(requestQueue);
+    
+    while(!temp.empty()){
+        cout<<temp.top().first<<" "<<temp.top().second<<endl;
+        temp.pop();
+    }
+    sem_post(&mutex);
+
 }
 
 void* ServerThread(void* arg) {
@@ -151,14 +170,17 @@ void* ServerThread(void* arg) {
     while(1){
         int clientSocket = accept(serverSocket, nullptr, nullptr); 
         // recieving data 
-        pair<string,int> data = recvEvent(clientSocket);
-        if("request_Resource"==data.first){
-            string msg = to_string(LamportClock) + " " + to_string(PID) + " reply_ok";
-            const char* message = msg.c_str(); 
-            cout<<"replied\n";
-            pushIntoQueue(data.second,LamportClock);
-            sendEvent(clientSocket,true);
+        pair<string,pair<int,int>> data = recvEvent(clientSocket);
         
+        if("request_Resource"==data.first){
+            pushIntoQueue(data.second.first,data.second.second,false);
+            sendEvent(clientSocket,"reply_ok");
+            cout<<"replied\n";
+        
+        }
+        else if("pop_from_queue"==data.first){
+            popFromQueue();
+            cout<<"popped from queue\n";
         }
     }
 
@@ -170,35 +192,57 @@ void* ServerThread(void* arg) {
     pthread_exit(NULL);
 }
 
-void* ClientThread(void* arg) {
-    srand(std::time(0));
-    for(int i=0;i<callLimit;i++){
-        sleep(rand()%10);
-        cout<<"client thread\n";
-        int clientSocket = socket(AF_INET, SOCK_STREAM, 0); 
-        allSockID.push_back(100+clientSocket);
+void releaseResource(int PORT){
+    int clientSocket = socket(AF_INET, SOCK_STREAM, 0); 
+    allSockID.push_back(100+clientSocket);
 
-        pushIntoQueue(PID,LamportClock);
+    sockaddr_in serverAddress; 
+    serverAddress.sin_family = AF_INET; 
+    serverAddress.sin_port = htons(PORT); 
+    serverAddress.sin_addr.s_addr = INADDR_ANY; 
+
+
+    int a = connect(clientSocket, (struct sockaddr*)&serverAddress,  sizeof(serverAddress)); 
+    // cout<<a<<endl;
+    // sending data 
+
+    while(1){
+        int a = sendEvent(clientSocket,"pop_from_queue");
+        cout<<"Send "<<a<<endl;
+        if(a>0){
+            break;
+        }
+    }
+
+    close(clientSocket);
+    allSockID.erase(find(allSockID.begin(), allSockID.end(), clientSocket+100));
+}
+
+void requestResource(int PORT){
+     int clientSocket = socket(AF_INET, SOCK_STREAM, 0); 
+        cout<<"client socket "<<clientSocket;
+
+        allSockID.push_back(100+clientSocket);
+        
 
         // specifying address 
         sockaddr_in serverAddress; 
         serverAddress.sin_family = AF_INET; 
-        serverAddress.sin_port = htons(PORT2); 
+        serverAddress.sin_port = htons(PORT); 
         serverAddress.sin_addr.s_addr = INADDR_ANY; 
     
 
         int a = connect(clientSocket, (struct sockaddr*)&serverAddress,  sizeof(serverAddress)); 
-        // cout<<a<<endl;
-        // sending data 
+
         string msg = to_string(LamportClock) + " " + to_string(PID) + " request_Resource";
         const char* message = msg.c_str();
 
         while(1){
-            int a = sendEvent(clientSocket,false);
+            int a = sendEvent(clientSocket,"request_Resource");
             cout<<"Send "<<a<<endl;
-            pair<string,int> data = recvEvent(clientSocket);
+            pair<string,pair<int,int>> data = recvEvent(clientSocket);
             if("reply_ok"==data.first){
-                cout<<"got reply 2\n";
+                cout<<"got reply"<<PORT<<"\n";
                 break;
             }
         }
@@ -208,35 +252,32 @@ void* ClientThread(void* arg) {
         close(clientSocket);
         allSockID.erase(find(allSockID.begin(), allSockID.end(), clientSocket+100));
 
-        //send request
+}
 
-        int clientSocket2 = socket(AF_INET, SOCK_STREAM, 0); 
-        allSockID.push_back(100+clientSocket2);
-        serverAddress.sin_port = htons(PORT3); 
-
-        connect(clientSocket2, (struct sockaddr*)&serverAddress, sizeof(serverAddress)); 
-        
-        // sending data 
-        
-        while(1){
-            string msg = to_string(LamportClock) + " " + to_string(PID) + " request_Resource";
-            const char* message = msg.c_str();
-            sendEvent(clientSocket,false);
-            pair<string,int> data = recvEvent(clientSocket);
-            if("reply_ok"==data.first){
-                cout<<"got reply 3\n";
-                break;
-            }
-        }
+void* ClientThread(void* arg) {
     
-        // closing socket 
-        close(clientSocket);
-        allSockID.erase(find(allSockID.begin(), allSockID.end(), clientSocket+100));
+    srand(std::time(0));
+    for(int i=0;i<callLimit;i++){
+        int x = 2+rand()%10;
+        //int x = 5;
+        cout<<"rand()%10 "<<x<<endl;
+        sleep(x);
+        cout<<"client thread\n";
+        pushIntoQueue(PID,LamportClock,true);
+        requestResource(PORT2);
+        requestResource(PORT3);
 
         cout<<"lampart clock "<<LamportClock<<"\n";
         
-        while(!checkTurn()){}
+        while(!checkTurn()){
+            continue;
+        }
+        printQueue();
         runCriticalSection();
+        releaseResource(PORT2);
+        releaseResource(PORT3);
+        //socket 
+
         cout<<"Thread exited\n";
     }
     
@@ -245,6 +286,7 @@ void* ClientThread(void* arg) {
 
 int main() {
     sem_init(&mutex, 0, 1); 
+    sem_init(&lockClock, 0, 1); 
 
     pthread_t threads[NUM_TH];
     struct data_thread td[NUM_TH];
