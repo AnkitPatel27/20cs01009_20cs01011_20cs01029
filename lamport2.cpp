@@ -16,11 +16,11 @@
 using namespace std;
 
 #define NUM_TH 2
-#define PORT1 8081
-#define PORT2 8082
+#define PORT1 8082
+#define PORT2 8081
 #define PORT3 8083
 #define callLimit 1
-int PID = 1;
+int PID = 2;
 sem_t mutex;
 int LamportClock = 0;
 vector <int> allSockID;
