@@ -94,12 +94,9 @@ void runCriticalSection()
 {
     incrementLogicalClock();
     cout << "Inside Critical Section---------------------------\n";
-    cout << "Writing in file";
-    // Make a file and write it
-    std::ofstream outfile("critical_section.txt");
-
-    outfile << "my text here!" << std::endl;
-
+    cout << "Writing in file\n";
+    std::ofstream outfile("critical_section.txt", std::ios::app); // open in append mode
+    outfile << "Writing from process PID : " << PID << std::endl;
     outfile.close();
     sleep(5);
     cout << "Critical Section End---------------------------\n";
@@ -203,7 +200,7 @@ void *ServerThread(void *arg)
         {
             pushIntoQueue(data.second.first, data.second.second, false);
             sendEvent(clientSocket, "reply_ok");
-            cout << "Replied\n";
+            cout << "Replied for resource request of process : "<<data.second.first<<"\n";
         }
         else if ("pop_from_queue" == data.first)
         {
@@ -236,7 +233,6 @@ void releaseResource(int PORT)
     while (1)
     {
         int a = sendEvent(clientSocket, "pop_from_queue");
-        cout << "Releasing Resourse from process: " << PID << endl;
         if (a > 0)
         {
             break;
@@ -268,11 +264,11 @@ void requestResource(int PORT)
     while (1)
     {
         int a = sendEvent(clientSocket, "request_Resource");
-        cout << "Send " << a << endl;
+        cout << "Sending request from process :  " << PID << endl;
         pair<string, pair<int, int>> data = recvEvent(clientSocket);
         if ("reply_ok" == data.first)
         {
-            cout << "got reply" << PORT << "\n";
+            cout << "got reply from " << PORT << "\n";
             break;
         }
     }
@@ -289,7 +285,7 @@ void *ClientThread(void *arg)
     srand(std::time(0));
     for (int i = 0; i < callLimit; i++)
     {
-        int x = 2 + rand() % 5;
+        int x = 4 + rand() % 10;
         // int x = 5;
         cout << "Waiting for " << x << " seconds to client thread!!!" << endl;
         sleep(x);
@@ -306,6 +302,7 @@ void *ClientThread(void *arg)
         }
         printQueue();
         runCriticalSection();
+        cout << "Releasing Resourse from process: " << PID << endl;
         releaseResource(PORT2);
         releaseResource(PORT3);
         // socket
